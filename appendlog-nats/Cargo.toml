@@ -1,0 +1,13 @@
+[package]
+name = "appendlog-nats"
+version = "0.0.0"
+edition = "2021"
+
+[dependencies]
+async-nats = "0.38"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+appendlog-traits = { path = "../appendlog-traits" }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["full"] }

@@ -1,0 +1,7 @@
+[workspace]
+resolver = "2"
+members = [
+    "appendlog-traits",
+    "appendlog-mem",
+    "appendlog-nats",
+]
