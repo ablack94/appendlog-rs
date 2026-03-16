@@ -5,9 +5,15 @@ use serde::de::DeserializeOwned;
 use appendlog_traits::{AsyncConsumer, Index, Record};
 use std::marker::PhantomData;
 
+enum ConsumerState<T> {
+    Empty,
+    Fetched(async_nats::jetstream::Message),
+    Parsed(Record<T>, async_nats::jetstream::Message),
+}
+
 pub struct NatsConsumer<T> {
     messages: pull::Stream,
-    pending: Option<(Record<T>, async_nats::jetstream::Message)>,
+    state: ConsumerState<T>,
     _marker: PhantomData<T>,
 }
 
@@ -25,32 +31,47 @@ impl<T> NatsConsumer<T> {
 
         NatsConsumer {
             messages,
-            pending: None,
+            state: ConsumerState::Empty,
             _marker: PhantomData,
         }
     }
+}
+
+fn try_parse<T: DeserializeOwned>(msg: &async_nats::jetstream::Message) -> Option<Record<T>> {
+    let info = msg.info().ok()?;
+    let index = Index::from(info.stream_sequence);
+    let data: T = serde_json::from_slice(&msg.payload).ok()?;
+    Some(Record::new(index, data))
 }
 
 impl<T: DeserializeOwned + Send + Sync> AsyncConsumer for NatsConsumer<T> {
     type Item = T;
 
     async fn next(&mut self) -> Option<Record<Self::Item>> {
-        if let Some((record, _msg)) = &self.pending {
-            return Some(record.clone());
-        }
+        let msg = match std::mem::replace(&mut self.state, ConsumerState::Empty) {
+            ConsumerState::Parsed(record, msg) => {
+                self.state = ConsumerState::Parsed(record.clone(), msg);
+                return Some(record);
+            }
+            ConsumerState::Fetched(msg) => msg,
+            ConsumerState::Empty => {
+                let msg = self.messages.next().await?;
+                msg.ok()?
+            }
+        };
 
-        let msg = self.messages.next().await?;
-        let msg = msg.ok()?;
-        let info = msg.info().ok()?;
-        let index = Index::from(info.stream_sequence);
-        let data: T = serde_json::from_slice(&msg.payload).ok()?;
-        let record = Record::new(index, data);
-        self.pending = Some((record.clone(), msg));
-        Some(record)
+        if let Some(record) = try_parse(&msg) {
+            self.state = ConsumerState::Parsed(record.clone(), msg);
+            Some(record)
+        } else {
+            self.state = ConsumerState::Fetched(msg);
+            None
+        }
     }
 
     async fn ack(&mut self) {
-        if let Some((_, msg)) = self.pending.take() {
+        let prev = std::mem::replace(&mut self.state, ConsumerState::Empty);
+        if let ConsumerState::Parsed(_, msg) | ConsumerState::Fetched(msg) = prev {
             msg.ack().await.ok();
         }
     }
