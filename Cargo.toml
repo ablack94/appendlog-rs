@@ -4,4 +4,5 @@ members = [
     "appendlog-traits",
     "appendlog-mem",
     "appendlog-nats",
+    "appendlog-actor",
 ]
