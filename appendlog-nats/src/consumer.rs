@@ -7,7 +7,7 @@ use std::marker::PhantomData;
 
 pub struct NatsConsumer<T> {
     messages: pull::Stream,
-    pending: Option<(Index, T, async_nats::jetstream::Message)>,
+    pending: Option<(Record<T>, async_nats::jetstream::Message)>,
     _marker: PhantomData<T>,
 }
 
@@ -31,12 +31,12 @@ impl<T> NatsConsumer<T> {
     }
 }
 
-impl<T: DeserializeOwned + Clone + Send> AsyncConsumer for NatsConsumer<T> {
+impl<T: DeserializeOwned + Send + Sync> AsyncConsumer for NatsConsumer<T> {
     type Item = T;
 
     async fn next(&mut self) -> Option<Record<Self::Item>> {
-        if let Some((index, data, _msg)) = &self.pending {
-            return Some(Record { index: *index, data: data.clone() });
+        if let Some((record, _msg)) = &self.pending {
+            return Some(record.clone());
         }
 
         let msg = self.messages.next().await?;
@@ -44,12 +44,13 @@ impl<T: DeserializeOwned + Clone + Send> AsyncConsumer for NatsConsumer<T> {
         let info = msg.info().ok()?;
         let index = Index::from(info.stream_sequence);
         let data: T = serde_json::from_slice(&msg.payload).ok()?;
-        self.pending = Some((index, data.clone(), msg));
-        Some(Record { index, data })
+        let record = Record::new(index, data);
+        self.pending = Some((record.clone(), msg));
+        Some(record)
     }
 
     async fn ack(&mut self) {
-        if let Some((_index, _data, msg)) = self.pending.take() {
+        if let Some((_, msg)) = self.pending.take() {
             msg.ack().await.ok();
         }
     }

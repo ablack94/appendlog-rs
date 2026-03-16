@@ -63,6 +63,6 @@ impl<T: DeserializeOwned + Send + Sync> AsyncLookup for NatsLog<T> {
         let sequence: u64 = index.into();
         let raw = self.stream.get_raw_message(sequence).await.ok()?;
         let data: T = serde_json::from_slice(&raw.payload).ok()?;
-        Some(Record { index, data })
+        Some(Record::new(index, data))
     }
 }
