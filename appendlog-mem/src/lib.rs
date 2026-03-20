@@ -1,7 +1,7 @@
 use std::{collections::VecDeque, sync::Arc};
 
 use parking_lot::{Condvar, Mutex};
-use appendlog_traits::{Appender, Index, Lookup};
+use appendlog_traits::{Appender, Index, Lookup, Record};
 
 struct LogInner<T> {
     entries: VecDeque<T>,
@@ -83,9 +83,12 @@ impl<T: Clone> Appender for Log<T> {
 impl<T: Clone> Lookup for Log<T> {
     type Item = T;
 
-    fn get(&self, index: Index) -> Option<Self::Item> {
+    fn get(&self, index: Index) -> Option<Record<Self::Item>> {
         match index.try_into() {
-            Ok(index_usize) => self.state.get(index_usize),
+            Ok(index_usize) => self
+                .state
+                .get(index_usize)
+                .map(|data| Record::new(index, data)),
             Err(_) => None,
         }
     }
