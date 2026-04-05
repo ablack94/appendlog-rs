@@ -1,6 +1,7 @@
 use std::fmt;
 
 use appendlog_traits::{AsyncAppender, AsyncConsumer};
+use tracing::{debug, info_span, Instrument};
 
 use crate::Handler;
 
@@ -47,20 +48,29 @@ where
 {
     let last_index = handler.init().await.map_err(RunError::Handler)?;
     while let Some(record) = consumer.next().await.map_err(RunError::Consumer)? {
+        let index = record.index;
+
         // Skip events already processed (state is ahead of consumer after crash)
         if let Some(last) = last_index {
-            if record.index <= last {
+            if index <= last {
+                debug!(index = u64::from(index), "skipping already-processed event");
                 consumer.ack().await.map_err(RunError::Consumer)?;
                 continue;
             }
         }
-        let index = record.index;
-        let outputs = handler.handle(&record.data);
-        for output in outputs {
-            appender.append(output).await.map_err(RunError::Appender)?;
+
+        async {
+            let outputs = handler.handle(&record.data);
+            for (seq, output) in outputs.into_iter().enumerate() {
+                let output_index = appender.append(output).await.map_err(RunError::Appender)?;
+                debug!(seq, output_index = u64::from(output_index), "appended");
+            }
+            handler.save_state(index).await.map_err(RunError::Handler)?;
+            consumer.ack().await.map_err(RunError::Consumer)?;
+            Ok::<_, RunError<C::Error, A::Error>>(())
         }
-        handler.save_state(index).await.map_err(RunError::Handler)?;
-        consumer.ack().await.map_err(RunError::Consumer)?;
+        .instrument(info_span!("process", index = u64::from(index)))
+        .await?;
     }
     Ok(())
 }

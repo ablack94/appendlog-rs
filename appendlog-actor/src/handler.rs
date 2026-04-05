@@ -98,7 +98,10 @@ macro_rules! impl_handler_for_tuple {
 
             fn handle(&mut self, event: &E) -> Vec<E> {
                 let mut out = Vec::new();
-                $(out.extend(self.$idx.handle(event));)+
+                $({
+                    let _span = tracing::info_span!("handler", slot = $idx).entered();
+                    out.extend(self.$idx.handle(event));
+                })+
                 out
             }
 

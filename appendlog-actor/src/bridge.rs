@@ -2,6 +2,7 @@ use std::fmt;
 use std::sync::Arc;
 
 use appendlog_traits::{AsyncAppender, AsyncConsumer};
+use tracing::{debug, info_span, Instrument};
 
 pub enum BridgeError<CE, AE> {
     Consumer(CE),
@@ -41,11 +42,18 @@ where
     T: Clone,
 {
     while let Some(record) = consumer.next().await.map_err(BridgeError::Consumer)? {
-        appender
-            .append(Arc::unwrap_or_clone(record.data))
-            .await
-            .map_err(BridgeError::Appender)?;
-        consumer.ack().await.map_err(BridgeError::Consumer)?;
+        let index = record.index;
+        async {
+            let output_index = appender
+                .append(Arc::unwrap_or_clone(record.data))
+                .await
+                .map_err(BridgeError::Appender)?;
+            debug!(output_index = u64::from(output_index), "forwarded");
+            consumer.ack().await.map_err(BridgeError::Consumer)?;
+            Ok::<_, BridgeError<C::Error, A::Error>>(())
+        }
+        .instrument(info_span!("bridge", index = u64::from(index)))
+        .await?;
     }
     Ok(())
 }
@@ -62,10 +70,19 @@ where
     F: Fn(In) -> Option<Out>,
 {
     while let Some(record) = consumer.next().await.map_err(BridgeError::Consumer)? {
-        if let Some(out) = f(Arc::unwrap_or_clone(record.data)) {
-            appender.append(out).await.map_err(BridgeError::Appender)?;
+        let index = record.index;
+        async {
+            if let Some(out) = f(Arc::unwrap_or_clone(record.data)) {
+                let output_index = appender.append(out).await.map_err(BridgeError::Appender)?;
+                debug!(output_index = u64::from(output_index), "forwarded");
+            } else {
+                debug!("filtered");
+            }
+            consumer.ack().await.map_err(BridgeError::Consumer)?;
+            Ok::<_, BridgeError<C::Error, A::Error>>(())
         }
-        consumer.ack().await.map_err(BridgeError::Consumer)?;
+        .instrument(info_span!("bridge_map", index = u64::from(index)))
+        .await?;
     }
     Ok(())
 }
