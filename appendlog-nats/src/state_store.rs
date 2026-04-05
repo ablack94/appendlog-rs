@@ -35,9 +35,8 @@ impl<S: Serialize + DeserializeOwned + Send + Sync> appendlog_actor::AsyncStateS
 
     async fn save(&self, state: &Self::State) {
         let bytes = serde_json::to_vec(state).expect("failed to serialize state");
-        self.store
-            .put(&self.key, bytes.into())
-            .await
-            .expect("failed to save state");
+        if let Err(err) = self.store.put(&self.key, bytes.into()).await {
+            eprintln!("warning: failed to save state: {err}");
+        }
     }
 }
