@@ -25,12 +25,13 @@ impl Actor for KvActor {
     type Input = Command;
     type Output = Response;
     type State = HashMap<String, String>;
+    type Outputs = Option<Response>;
 
     fn handle(
         &self,
         input: Self::Input,
         mut state: Self::State,
-    ) -> (Vec<Self::Output>, Self::State) {
+    ) -> (Self::Outputs, Self::State) {
         let response = match input {
             Command::Set { key, value } => {
                 info!(key, value, "SET");
@@ -48,7 +49,7 @@ impl Actor for KvActor {
                 Response::Deleted(existed)
             }
         };
-        (vec![response], state)
+        (Some(response), state)
     }
 }
 
