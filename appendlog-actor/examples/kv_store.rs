@@ -2,50 +2,60 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use tracing::info;
 
-use appendlog_actor::Actor;
+use appendlog_actor::{Actor, ActorHandler};
 use appendlog_traits::{AsyncAppender, AsyncConsumer};
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-enum Command {
-    Set { key: String, value: String },
-    Get { key: String },
-    Delete { key: String },
-}
+type Cid = u64;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-enum Response {
-    Ok,
-    Value(Option<String>),
-    Deleted(bool),
+enum KvEvent {
+    // Commands
+    Set { cid: Cid, key: String, value: String },
+    Get { cid: Cid, key: String },
+    Delete { cid: Cid, key: String },
+    // Responses
+    Ok { cid: Cid },
+    Value { cid: Cid, value: Option<String> },
+    Deleted { cid: Cid, existed: bool },
 }
 
 struct KvActor;
 
 impl Actor for KvActor {
-    type Input = Command;
-    type Output = Response;
+    type Event = KvEvent;
     type State = HashMap<String, String>;
-    type Outputs = Option<Response>;
+    type Outputs = Option<KvEvent>;
 
-    fn handle(&self, input: Self::Input, mut state: Self::State) -> (Self::Outputs, Self::State) {
-        let response = match input {
-            Command::Set { key, value } => {
-                info!(key, value, "SET");
+    fn handle(&self, event: Self::Event, mut state: Self::State) -> (Self::Outputs, Self::State) {
+        let response = match event {
+            KvEvent::Set { cid, key, value } => {
+                info!(cid, key, value, "SET");
                 state.insert(key, value);
-                Response::Ok
+                Some(KvEvent::Ok { cid })
             }
-            Command::Get { key } => {
+            KvEvent::Get { cid, key } => {
                 let value = state.get(&key).cloned();
-                info!(key, ?value, "GET");
-                Response::Value(value)
+                info!(cid, key, ?value, "GET");
+                Some(KvEvent::Value { cid, value })
             }
-            Command::Delete { key } => {
+            KvEvent::Delete { cid, key } => {
                 let existed = state.remove(&key).is_some();
-                info!(key, existed, "DELETE");
-                Response::Deleted(existed)
+                info!(cid, key, existed, "DELETE");
+                Some(KvEvent::Deleted { cid, existed })
             }
+            // Ignore response events
+            _ => None,
         };
-        (Some(response), state)
+        (response, state)
+    }
+}
+
+// KvEvent is its own master event, so conversion is trivial
+impl<'a> TryFrom<&'a KvEvent> for KvEvent {
+    type Error = std::convert::Infallible;
+
+    fn try_from(event: &'a KvEvent) -> Result<Self, Self::Error> {
+        Ok(event.clone())
     }
 }
 
@@ -57,28 +67,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let jetstream = async_nats::jetstream::new(client.clone());
 
     // Clean up state from previous runs
-    let _ = jetstream.delete_stream("kv-commands").await;
-    let _ = jetstream.delete_stream("kv-responses").await;
+    let _ = jetstream.delete_stream("kv-events").await;
     let _ = jetstream.delete_key_value("kv-actor-state").await;
 
-    // Create input and output logs for the actor
-    let input_log =
-        appendlog_nats::NatsLog::<Command>::new(client.clone(), "kv-commands", "kv.commands")
-            .await?;
-    let output_log =
-        appendlog_nats::NatsLog::<Response>::new(client.clone(), "kv-responses", "kv.responses")
-            .await?;
+    // Single log for all events
+    let log =
+        appendlog_nats::NatsLog::<KvEvent>::new(client.clone(), "kv-events", "kv.events").await?;
 
-    // Separate log handle for the publisher to send commands
-    let command_publisher =
-        appendlog_nats::NatsLog::<Command>::new(client.clone(), "kv-commands", "kv.commands")
-            .await?;
+    // Separate handle for the publisher
+    let publisher =
+        appendlog_nats::NatsLog::<KvEvent>::new(client.clone(), "kv-events", "kv.events").await?;
 
     // Consumer for reading responses
-    let response_consumer = output_log.consumer("kv-response-reader").await;
+    let response_consumer = log.consumer("kv-response-reader").await;
 
     // Consumer and state store for the actor
-    let actor_consumer = input_log.consumer("kv-actor").await;
+    let actor_consumer = log.consumer("kv-actor").await;
     jetstream
         .create_key_value(async_nats::jetstream::kv::Config {
             bucket: "kv-actor-state".to_string(),
@@ -88,30 +92,43 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let state_store =
         appendlog_nats::NatsStateStore::new(jetstream, "kv-actor-state", "state").await;
 
+    // Build the handler
+    let handler = (ActorHandler::new(KvActor, state_store),);
+
     // Spawn the actor
-    let actor_handle = tokio::spawn(async move {
-        appendlog_actor::run(KvActor, actor_consumer, output_log, state_store).await
-    });
+    let actor_handle =
+        tokio::spawn(async move { appendlog_actor::run(actor_consumer, log, handler).await });
 
     // Spawn the publisher
     let publisher_handle = tokio::spawn(async move {
         let commands = vec![
-            Command::Set {
+            KvEvent::Set {
+                cid: 1,
                 key: "name".into(),
                 value: "Alice".into(),
             },
-            Command::Set {
+            KvEvent::Set {
+                cid: 2,
                 key: "age".into(),
                 value: "30".into(),
             },
-            Command::Get { key: "name".into() },
-            Command::Delete { key: "age".into() },
-            Command::Get { key: "age".into() },
+            KvEvent::Get {
+                cid: 3,
+                key: "name".into(),
+            },
+            KvEvent::Delete {
+                cid: 4,
+                key: "age".into(),
+            },
+            KvEvent::Get {
+                cid: 5,
+                key: "age".into(),
+            },
         ];
 
         for cmd in &commands {
             info!(?cmd, "sending command");
-            command_publisher
+            publisher
                 .append(cmd.clone())
                 .await
                 .expect("failed to append command");
@@ -119,14 +136,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         info!(count = commands.len(), "all commands sent");
     });
 
-    // Spawn the response reader
+    // Spawn the response reader — matches responses to commands by cid
     let reader_handle = tokio::spawn(async move {
         let mut consumer = response_consumer;
-        let expected = 5;
-        for i in 0..expected {
+        let expected_responses = 5;
+        let mut response_count = 0;
+        while response_count < expected_responses {
             match consumer.next().await {
                 Ok(Some(record)) => {
-                    info!(index = i + 1, response = ?record.data, "received response");
+                    match &*record.data {
+                        KvEvent::Ok { cid }
+                        | KvEvent::Value { cid, .. }
+                        | KvEvent::Deleted { cid, .. } => {
+                            response_count += 1;
+                            info!(
+                                cid,
+                                response = ?record.data,
+                                "received response"
+                            );
+                        }
+                        _ => {
+                            // Skip command events
+                        }
+                    }
                     consumer.ack().await.expect("failed to ack");
                 }
                 Ok(None) => break,

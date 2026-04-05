@@ -92,9 +92,7 @@ impl<T: DeserializeOwned + Send + Sync> AsyncConsumer for NatsConsumer<T> {
     async fn ack(&mut self) -> Result<(), Self::Error> {
         let prev = std::mem::replace(&mut self.state, ConsumerState::Empty);
         if let ConsumerState::Parsed(_, msg) | ConsumerState::Fetched(msg) = prev {
-            msg.ack()
-                .await
-                .map_err(NatsConsumerError::Ack)?;
+            msg.ack().await.map_err(NatsConsumerError::Ack)?;
         }
         Ok(())
     }

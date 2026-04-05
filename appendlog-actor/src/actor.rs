@@ -1,8 +1,7 @@
 pub trait Actor {
-    type Input;
-    type Output;
+    type Event;
     type State: Default;
-    type Outputs: IntoIterator<Item = Self::Output>;
+    type Outputs: IntoIterator<Item = Self::Event>;
 
-    fn handle(&self, input: Self::Input, state: Self::State) -> (Self::Outputs, Self::State);
+    fn handle(&self, event: Self::Event, state: Self::State) -> (Self::Outputs, Self::State);
 }

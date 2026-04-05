@@ -1,5 +1,6 @@
+use appendlog_traits::Index;
 use async_nats::jetstream::{self, kv};
-use serde::{de::DeserializeOwned, Serialize};
+use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::marker::PhantomData;
 
 pub struct NatsStateStore<S> {
@@ -20,6 +21,12 @@ impl<S> NatsStateStore<S> {
             _marker: PhantomData,
         }
     }
+}
+
+#[derive(Serialize, Deserialize)]
+struct Checkpoint<S> {
+    state: S,
+    index: u64,
 }
 
 #[derive(Debug)]
@@ -45,7 +52,7 @@ impl<S: Serialize + DeserializeOwned + Send + Sync> appendlog_actor::AsyncStateS
     type State = S;
     type Error = NatsStateStoreError;
 
-    async fn load(&self) -> Result<Option<Self::State>, Self::Error> {
+    async fn load(&self) -> Result<Option<(Self::State, Index)>, Self::Error> {
         let entry = self
             .store
             .get(&self.key)
@@ -54,12 +61,17 @@ impl<S: Serialize + DeserializeOwned + Send + Sync> appendlog_actor::AsyncStateS
         let Some(bytes) = entry else {
             return Ok(None);
         };
-        let state = serde_json::from_slice(&bytes).map_err(NatsStateStoreError::Serialize)?;
-        Ok(Some(state))
+        let checkpoint: Checkpoint<S> =
+            serde_json::from_slice(&bytes).map_err(NatsStateStoreError::Serialize)?;
+        Ok(Some((checkpoint.state, Index::from(checkpoint.index))))
     }
 
-    async fn save(&self, state: &Self::State) -> Result<(), Self::Error> {
-        let bytes = serde_json::to_vec(state).map_err(NatsStateStoreError::Serialize)?;
+    async fn save(&self, state: &Self::State, index: Index) -> Result<(), Self::Error> {
+        let checkpoint = Checkpoint {
+            state,
+            index: u64::from(index),
+        };
+        let bytes = serde_json::to_vec(&checkpoint).map_err(NatsStateStoreError::Serialize)?;
         self.store
             .put(&self.key, bytes.into())
             .await

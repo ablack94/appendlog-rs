@@ -11,7 +11,7 @@ Provides a simple trait-based interface for append-only logs where each entry ge
 | `appendlog-traits` | Core `Appender`/`Lookup` traits (sync) and `AsyncAppender`/`AsyncLookup`/`AsyncConsumer` (async) |
 | `appendlog-mem` | In-memory backend using `parking_lot` — good for testing and prototyping |
 | `appendlog-nats` | [NATS JetStream](https://docs.nats.io/nats-concepts/jetstream) backend — persistent, distributed |
-| `appendlog-actor` | Actor framework that consumes from one log, processes with persistent state, and writes to another |
+| `appendlog-actor` | Actor framework: lockstep multi-actor dispatch on a single log, plus bridges between logs |
 
 ## Quick start
 
@@ -41,33 +41,45 @@ Requires a NATS server with JetStream enabled (`nats-server -js`).
 
 ### Actor
 
-The `appendlog-actor` crate provides a framework for building stateful stream processors. An actor consumes messages from an input log, processes them with persistent state, and appends results to an output log.
+The `appendlog-actor` crate provides two primitives:
+
+- **Actor** — reads from and writes back to the **same** log. Pure state machine.
+- **Bridge** — consumes from one log, appends to another. Stateless plumbing.
+
+Multiple actors can be composed into a single lockstep dispatcher via tuple handlers:
 
 ```rust
-use appendlog_actor::{Actor, AsyncStateStore};
+use appendlog_actor::{Actor, ActorHandler};
 
 struct MyActor;
 
 impl Actor for MyActor {
-    type Input = String;
-    type Output = String;
+    type Event = String;
     type State = Vec<String>;
+    type Outputs = Vec<String>;
 
-    fn handle(&self, input: Self::Input, mut state: Self::State) -> (Vec<Self::Output>, Self::State) {
-        let output = format!("processed: {input}");
-        state.push(input);
+    fn handle(&self, event: Self::Event, mut state: Self::State) -> (Self::Outputs, Self::State) {
+        let output = format!("processed: {event}");
+        state.push(event);
         (vec![output], state)
     }
 }
 ```
 
-Wire it up with any `AsyncConsumer` + `AsyncAppender` + `AsyncStateStore`:
+Wire it up with `ActorHandler` and the lockstep `run` loop:
 
 ```rust
-let final_state = appendlog_actor::run(MyActor, consumer, output_log, state_store).await?;
+let handler = (ActorHandler::new(MyActor, state_store),);
+appendlog_actor::run(consumer, appender, handler).await?;
 ```
 
-The run loop handles message consumption, output appending, state persistence, and acknowledgment automatically. State is saved before each ack to prevent message loss on crash (at-least-once delivery).
+The run loop consumes from the log, dispatches to all handlers, appends outputs back to the same log, saves state, then acks. State is saved before each ack for at-least-once delivery.
+
+For connecting separate logs, use `bridge` or `bridge_map`:
+
+```rust
+appendlog_actor::bridge(source_consumer, dest_appender).await?;
+```
 
 See [`appendlog-actor/examples/kv_store.rs`](appendlog-actor/examples/kv_store.rs) for a full example using NATS.
 
@@ -96,7 +108,12 @@ trait AsyncConsumer {
 
 // Actor
 trait Actor {
-    fn handle(&self, input: Self::Input, state: Self::State) -> (Vec<Self::Output>, Self::State);
+    fn handle(&self, event: Self::Event, state: Self::State) -> (Self::Outputs, Self::State);
+}
+trait Handler<E> {
+    async fn init(&mut self) -> Result<(), Box<dyn Error + Send + Sync>>;
+    async fn handle(&mut self, event: &E) -> Vec<E>;
+    async fn save_state(&mut self) -> Result<(), Box<dyn Error + Send + Sync>>;
 }
 trait AsyncStateStore {
     async fn load(&self) -> Result<Option<Self::State>, Self::Error>;
