@@ -10,5 +10,8 @@ pub trait AsyncAppender {
     type Item;
     type Error;
 
-    fn append(&self, item: Self::Item) -> impl std::future::Future<Output = Result<Index, Self::Error>> + Send;
+    fn append(
+        &self,
+        item: Self::Item,
+    ) -> impl std::future::Future<Output = Result<Index, Self::Error>> + Send;
 }

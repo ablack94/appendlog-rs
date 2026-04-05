@@ -57,6 +57,12 @@ pub struct Log<T> {
     state: Arc<LogState<T>>,
 }
 
+impl<T> Default for Log<T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<T> Log<T> {
     pub fn new() -> Self {
         Self {

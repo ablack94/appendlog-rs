@@ -75,17 +75,33 @@ See [`appendlog-actor/examples/kv_store.rs`](appendlog-actor/examples/kv_store.r
 
 ```rust
 // Synchronous
-trait Appender { fn append(&self, item: Self::Item) -> Index; }
-trait Lookup   { fn get(&self, index: Index) -> Option<Record<Self::Item>>; }
+trait Appender {
+    fn append(&self, item: Self::Item) -> Index;
+}
+trait Lookup {
+    fn get(&self, index: Index) -> Option<Record<Self::Item>>;
+}
 
 // Async (all I/O traits return Result with an associated Error type)
-trait AsyncAppender  { async fn append(&self, item: Self::Item) -> Result<Index, Self::Error>; }
-trait AsyncLookup    { async fn get(&self, index: Index) -> Option<Record<Self::Item>>; }
-trait AsyncConsumer  { async fn next(&mut self) -> Result<Option<Record<Self::Item>>, Self::Error>; async fn ack(&mut self) -> Result<(), Self::Error>; }
+trait AsyncAppender  {
+    async fn append(&self, item: Self::Item) -> Result<Index, Self::Error>;
+}
+trait AsyncLookup {
+    async fn get(&self, index: Index) -> Option<Record<Self::Item>>;
+}
+trait AsyncConsumer {
+    async fn next(&mut self) -> Result<Option<Record<Self::Item>>, Self::Error>;
+    async fn ack(&mut self) -> Result<(), Self::Error>;
+}
 
 // Actor
-trait Actor          { fn handle(&self, input: Self::Input, state: Self::State) -> (Vec<Self::Output>, Self::State); }
-trait AsyncStateStore { async fn load(&self) -> Result<Option<Self::State>, Self::Error>; async fn save(&self, state: &Self::State) -> Result<(), Self::Error>; }
+trait Actor {
+    fn handle(&self, input: Self::Input, state: Self::State) -> (Vec<Self::Output>, Self::State);
+}
+trait AsyncStateStore {
+    async fn load(&self) -> Result<Option<Self::State>, Self::Error>;
+    async fn save(&self, state: &Self::State) -> Result<(), Self::Error>;
+}
 ```
 
 ## License

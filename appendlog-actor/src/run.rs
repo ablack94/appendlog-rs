@@ -31,8 +31,11 @@ impl<CE: fmt::Display, AE: fmt::Display, SE: fmt::Display> fmt::Display for RunE
     }
 }
 
-impl<CE: fmt::Debug + fmt::Display, AE: fmt::Debug + fmt::Display, SE: fmt::Debug + fmt::Display>
-    std::error::Error for RunError<CE, AE, SE>
+impl<
+        CE: fmt::Debug + fmt::Display,
+        AE: fmt::Debug + fmt::Display,
+        SE: fmt::Debug + fmt::Display,
+    > std::error::Error for RunError<CE, AE, SE>
 {
 }
 
@@ -48,14 +51,21 @@ where
     P: AsyncAppender<Item = A::Output>,
     SS: AsyncStateStore<State = A::State>,
 {
-    let mut state = state_store.load().await.map_err(RunError::StateStore)?.unwrap_or_default();
+    let mut state = state_store
+        .load()
+        .await
+        .map_err(RunError::StateStore)?
+        .unwrap_or_default();
     while let Some(record) = consumer.next().await.map_err(RunError::Consumer)? {
         let (outputs, new_state) = actor.handle(Arc::unwrap_or_clone(record.data), state);
         state = new_state;
         for output in outputs {
             appender.append(output).await.map_err(RunError::Appender)?;
         }
-        state_store.save(&state).await.map_err(RunError::StateStore)?;
+        state_store
+            .save(&state)
+            .await
+            .map_err(RunError::StateStore)?;
         consumer.ack().await.map_err(RunError::Consumer)?;
     }
     Ok(state)

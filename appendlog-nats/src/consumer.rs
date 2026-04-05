@@ -94,7 +94,7 @@ impl<T: DeserializeOwned + Send + Sync> AsyncConsumer for NatsConsumer<T> {
         if let ConsumerState::Parsed(_, msg) | ConsumerState::Fetched(msg) = prev {
             msg.ack()
                 .await
-                .map_err(|e| NatsConsumerError::Ack(e.into()))?;
+                .map_err(NatsConsumerError::Ack)?;
         }
         Ok(())
     }

@@ -54,8 +54,7 @@ impl<S: Serialize + DeserializeOwned + Send + Sync> appendlog_actor::AsyncStateS
         let Some(bytes) = entry else {
             return Ok(None);
         };
-        let state =
-            serde_json::from_slice(&bytes).map_err(NatsStateStoreError::Serialize)?;
+        let state = serde_json::from_slice(&bytes).map_err(NatsStateStoreError::Serialize)?;
         Ok(Some(state))
     }
 

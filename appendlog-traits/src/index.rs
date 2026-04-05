@@ -1,15 +1,9 @@
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Default, Copy, Clone)]
 pub struct Index(u64);
 
 impl Index {
     pub fn new(index: impl Into<u64>) -> Self {
         Self(index.into())
-    }
-}
-
-impl Default for Index {
-    fn default() -> Self {
-        Self(0)
     }
 }
 

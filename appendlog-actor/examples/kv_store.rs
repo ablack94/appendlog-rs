@@ -111,7 +111,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         for cmd in &commands {
             info!(?cmd, "sending command");
-            command_publisher.append(cmd.clone()).await.expect("failed to append command");
+            command_publisher
+                .append(cmd.clone())
+                .await
+                .expect("failed to append command");
         }
         info!(count = commands.len(), "all commands sent");
     });
