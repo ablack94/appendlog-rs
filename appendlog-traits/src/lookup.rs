@@ -9,5 +9,8 @@ pub trait Lookup {
 pub trait AsyncLookup {
     type Item;
 
-    fn get(&self, index: Index) -> impl std::future::Future<Output = Option<Record<Self::Item>>> + Send;
+    fn get(
+        &self,
+        index: Index,
+    ) -> impl std::future::Future<Output = Option<Record<Self::Item>>> + Send;
 }

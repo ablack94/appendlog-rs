@@ -1,10 +1,10 @@
-mod log;
 mod consumer;
+mod log;
 
-pub use log::NatsLog;
-pub use consumer::NatsConsumer;
+pub use consumer::{NatsConsumer, NatsConsumerError};
+pub use log::{NatsAppendError, NatsLog};
 
 #[cfg(feature = "actor")]
 mod state_store;
 #[cfg(feature = "actor")]
-pub use state_store::NatsStateStore;
+pub use state_store::{NatsStateStore, NatsStateStoreError};

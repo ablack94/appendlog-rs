@@ -1,6 +1,6 @@
+use appendlog_traits::{AsyncAppender, AsyncLookup, Index, Record};
 use async_nats::jetstream::{self, stream::Stream};
 use serde::{de::DeserializeOwned, Serialize};
-use appendlog_traits::{AsyncAppender, AsyncLookup, Index, Record};
 use std::marker::PhantomData;
 
 use crate::NatsConsumer;
@@ -38,21 +38,40 @@ impl<T> NatsLog<T> {
     pub async fn consumer(&self, consumer_name: &str) -> NatsConsumer<T> {
         NatsConsumer::new(&self.stream, consumer_name).await
     }
-
 }
+
+#[derive(Debug)]
+pub enum NatsAppendError {
+    Serialize(serde_json::Error),
+    Publish(Box<dyn std::error::Error + Send + Sync>),
+}
+
+impl std::fmt::Display for NatsAppendError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            NatsAppendError::Serialize(e) => write!(f, "serialize error: {e}"),
+            NatsAppendError::Publish(e) => write!(f, "publish error: {e}"),
+        }
+    }
+}
+
+impl std::error::Error for NatsAppendError {}
 
 impl<T: Serialize + Send + Sync> AsyncAppender for NatsLog<T> {
     type Item = T;
+    type Error = NatsAppendError;
 
-    async fn append(&self, item: Self::Item) -> Index {
-        let payload = serde_json::to_vec(&item).expect("failed to serialize item");
+    async fn append(&self, item: Self::Item) -> Result<Index, Self::Error> {
+        let payload = serde_json::to_vec(&item).map_err(NatsAppendError::Serialize)?;
         let ack = self
             .context
             .publish(self.subject.clone(), payload.into())
             .await
-            .expect("failed to publish");
-        let ack = ack.await.expect("failed to get publish ack");
-        Index::from(ack.sequence)
+            .map_err(|e| NatsAppendError::Publish(Box::new(e)))?;
+        let ack = ack
+            .await
+            .map_err(|e| NatsAppendError::Publish(Box::new(e)))?;
+        Ok(Index::from(ack.sequence))
     }
 }
 

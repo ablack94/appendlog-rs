@@ -33,7 +33,7 @@ use appendlog_traits::{AsyncAppender, AsyncLookup};
 let client = async_nats::connect("localhost:4222").await?;
 let log = NatsLog::<String>::new(client, "my-stream", "my.subject").await?;
 
-let idx = log.append("hello".to_string()).await;
+let idx = log.append("hello".to_string()).await?;
 let item = log.get(idx).await; // Some("hello")
 ```
 
@@ -64,7 +64,7 @@ impl Actor for MyActor {
 Wire it up with any `AsyncConsumer` + `AsyncAppender` + `AsyncStateStore`:
 
 ```rust
-let final_state = appendlog_actor::run(MyActor, consumer, output_log, state_store).await;
+let final_state = appendlog_actor::run(MyActor, consumer, output_log, state_store).await?;
 ```
 
 The run loop handles message consumption, output appending, state persistence, and acknowledgment automatically. State is saved before each ack to prevent message loss on crash (at-least-once delivery).
@@ -78,14 +78,14 @@ See [`appendlog-actor/examples/kv_store.rs`](appendlog-actor/examples/kv_store.r
 trait Appender { fn append(&self, item: Self::Item) -> Index; }
 trait Lookup   { fn get(&self, index: Index) -> Option<Record<Self::Item>>; }
 
-// Async
-trait AsyncAppender  { async fn append(&self, item: Self::Item) -> Index; }
+// Async (all I/O traits return Result with an associated Error type)
+trait AsyncAppender  { async fn append(&self, item: Self::Item) -> Result<Index, Self::Error>; }
 trait AsyncLookup    { async fn get(&self, index: Index) -> Option<Record<Self::Item>>; }
-trait AsyncConsumer  { async fn next(&mut self) -> Option<Record<Self::Item>>; async fn ack(&mut self); }
+trait AsyncConsumer  { async fn next(&mut self) -> Result<Option<Record<Self::Item>>, Self::Error>; async fn ack(&mut self) -> Result<(), Self::Error>; }
 
 // Actor
 trait Actor          { fn handle(&self, input: Self::Input, state: Self::State) -> (Vec<Self::Output>, Self::State); }
-trait AsyncStateStore { async fn load(&self) -> Option<Self::State>; async fn save(&self, state: &Self::State); }
+trait AsyncStateStore { async fn load(&self) -> Result<Option<Self::State>, Self::Error>; async fn save(&self, state: &Self::State) -> Result<(), Self::Error>; }
 ```
 
 ## License

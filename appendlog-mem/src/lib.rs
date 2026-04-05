@@ -1,7 +1,7 @@
 use std::{collections::VecDeque, sync::Arc};
 
-use parking_lot::{Condvar, Mutex};
 use appendlog_traits::{Appender, Index, Lookup, Record};
+use parking_lot::{Condvar, Mutex};
 
 struct LogInner<T> {
     entries: VecDeque<T>,

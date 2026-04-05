@@ -1,5 +1,5 @@
-use serde::{Deserialize, Serialize};
 use appendlog_traits::{AsyncAppender, AsyncConsumer, AsyncLookup};
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct Event {
@@ -12,8 +12,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let log = appendlog_nats::NatsLog::<Event>::new(client, "events", "events.>").await?;
 
     // Append some events
-    let idx1 = log.append(Event { message: "hello".into() }).await;
-    let idx2 = log.append(Event { message: "world".into() }).await;
+    let idx1 = log
+        .append(Event {
+            message: "hello".into(),
+        })
+        .await?;
+    let idx2 = log
+        .append(Event {
+            message: "world".into(),
+        })
+        .await?;
     println!("appended at {idx1:?} and {idx2:?}");
 
     // Lookup by index
@@ -23,8 +31,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Consume via pull consumer
     let mut consumer = log.consumer("my-consumer").await;
-    let first = consumer.next().await;
-    let second = consumer.next().await;
+    let first = consumer.next().await?;
+    let second = consumer.next().await?;
     println!("consumed {first:?} and {second:?}");
 
     Ok(())

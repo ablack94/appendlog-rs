@@ -22,21 +22,49 @@ impl<S> NatsStateStore<S> {
     }
 }
 
+#[derive(Debug)]
+pub enum NatsStateStoreError {
+    Serialize(serde_json::Error),
+    Kv(Box<dyn std::error::Error + Send + Sync>),
+}
+
+impl std::fmt::Display for NatsStateStoreError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            NatsStateStoreError::Serialize(e) => write!(f, "state serialize error: {e}"),
+            NatsStateStoreError::Kv(e) => write!(f, "state kv error: {e}"),
+        }
+    }
+}
+
+impl std::error::Error for NatsStateStoreError {}
+
 impl<S: Serialize + DeserializeOwned + Send + Sync> appendlog_actor::AsyncStateStore
     for NatsStateStore<S>
 {
     type State = S;
+    type Error = NatsStateStoreError;
 
-    async fn load(&self) -> Option<Self::State> {
-        let entry = self.store.get(&self.key).await.ok()?;
-        let bytes = entry?;
-        serde_json::from_slice(&bytes).ok()
+    async fn load(&self) -> Result<Option<Self::State>, Self::Error> {
+        let entry = self
+            .store
+            .get(&self.key)
+            .await
+            .map_err(|e| NatsStateStoreError::Kv(Box::new(e)))?;
+        let Some(bytes) = entry else {
+            return Ok(None);
+        };
+        let state =
+            serde_json::from_slice(&bytes).map_err(NatsStateStoreError::Serialize)?;
+        Ok(Some(state))
     }
 
-    async fn save(&self, state: &Self::State) {
-        let bytes = serde_json::to_vec(state).expect("failed to serialize state");
-        if let Err(err) = self.store.put(&self.key, bytes.into()).await {
-            eprintln!("warning: failed to save state: {err}");
-        }
+    async fn save(&self, state: &Self::State) -> Result<(), Self::Error> {
+        let bytes = serde_json::to_vec(state).map_err(NatsStateStoreError::Serialize)?;
+        self.store
+            .put(&self.key, bytes.into())
+            .await
+            .map_err(|e| NatsStateStoreError::Kv(Box::new(e)))?;
+        Ok(())
     }
 }

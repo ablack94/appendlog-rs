@@ -1,8 +1,8 @@
+use appendlog_traits::{AsyncConsumer, Index, Record};
 use async_nats::jetstream::consumer::pull;
 use async_nats::jetstream::stream::Stream;
 use futures::StreamExt;
 use serde::de::DeserializeOwned;
-use appendlog_traits::{AsyncConsumer, Index, Record};
 use std::marker::PhantomData;
 
 enum ConsumerState<T> {
@@ -44,35 +44,58 @@ fn try_parse<T: DeserializeOwned>(msg: &async_nats::jetstream::Message) -> Optio
     Some(Record::new(index, data))
 }
 
+#[derive(Debug)]
+pub enum NatsConsumerError {
+    Messages(Box<dyn std::error::Error + Send + Sync>),
+    Ack(Box<dyn std::error::Error + Send + Sync>),
+}
+
+impl std::fmt::Display for NatsConsumerError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            NatsConsumerError::Messages(e) => write!(f, "consumer messages error: {e}"),
+            NatsConsumerError::Ack(e) => write!(f, "consumer ack error: {e}"),
+        }
+    }
+}
+
+impl std::error::Error for NatsConsumerError {}
+
 impl<T: DeserializeOwned + Send + Sync> AsyncConsumer for NatsConsumer<T> {
     type Item = T;
+    type Error = NatsConsumerError;
 
-    async fn next(&mut self) -> Option<Record<Self::Item>> {
+    async fn next(&mut self) -> Result<Option<Record<Self::Item>>, Self::Error> {
         let msg = match std::mem::replace(&mut self.state, ConsumerState::Empty) {
             ConsumerState::Parsed(record, msg) => {
                 self.state = ConsumerState::Parsed(record.clone(), msg);
-                return Some(record);
+                return Ok(Some(record));
             }
             ConsumerState::Fetched(msg) => msg,
             ConsumerState::Empty => {
-                let msg = self.messages.next().await?;
-                msg.ok()?
+                let Some(result) = self.messages.next().await else {
+                    return Ok(None);
+                };
+                result.map_err(|e| NatsConsumerError::Messages(Box::new(e)))?
             }
         };
 
         if let Some(record) = try_parse(&msg) {
             self.state = ConsumerState::Parsed(record.clone(), msg);
-            Some(record)
+            Ok(Some(record))
         } else {
             self.state = ConsumerState::Fetched(msg);
-            None
+            Ok(None)
         }
     }
 
-    async fn ack(&mut self) {
+    async fn ack(&mut self) -> Result<(), Self::Error> {
         let prev = std::mem::replace(&mut self.state, ConsumerState::Empty);
         if let ConsumerState::Parsed(_, msg) | ConsumerState::Fetched(msg) = prev {
-            msg.ack().await.ok();
+            msg.ack()
+                .await
+                .map_err(|e| NatsConsumerError::Ack(e.into()))?;
         }
+        Ok(())
     }
 }

@@ -27,11 +27,7 @@ impl Actor for KvActor {
     type State = HashMap<String, String>;
     type Outputs = Option<Response>;
 
-    fn handle(
-        &self,
-        input: Self::Input,
-        mut state: Self::State,
-    ) -> (Self::Outputs, Self::State) {
+    fn handle(&self, input: Self::Input, mut state: Self::State) -> (Self::Outputs, Self::State) {
         let response = match input {
             Command::Set { key, value } => {
                 info!(key, value, "SET");
@@ -108,20 +104,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 key: "age".into(),
                 value: "30".into(),
             },
-            Command::Get {
-                key: "name".into(),
-            },
-            Command::Delete {
-                key: "age".into(),
-            },
-            Command::Get {
-                key: "age".into(),
-            },
+            Command::Get { key: "name".into() },
+            Command::Delete { key: "age".into() },
+            Command::Get { key: "age".into() },
         ];
 
         for cmd in &commands {
             info!(?cmd, "sending command");
-            command_publisher.append(cmd.clone()).await;
+            command_publisher.append(cmd.clone()).await.expect("failed to append command");
         }
         info!(count = commands.len(), "all commands sent");
     });
@@ -131,9 +121,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut consumer = response_consumer;
         let expected = 5;
         for i in 0..expected {
-            if let Some(record) = consumer.next().await {
-                info!(index = i + 1, response = ?record.data, "received response");
-                consumer.ack().await;
+            match consumer.next().await {
+                Ok(Some(record)) => {
+                    info!(index = i + 1, response = ?record.data, "received response");
+                    consumer.ack().await.expect("failed to ack");
+                }
+                Ok(None) => break,
+                Err(e) => {
+                    info!("consumer error: {e}");
+                    break;
+                }
             }
         }
         info!("all responses received");
