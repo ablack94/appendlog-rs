@@ -3,6 +3,9 @@ use std::fmt;
 use appendlog_traits::{AsyncAppender, AsyncConsumer};
 use tracing::{debug, info_span, Instrument};
 
+#[cfg(feature = "otel")]
+use tracing_opentelemetry::OpenTelemetrySpanExt;
+
 use crate::Handler;
 
 pub enum RunError<CE, AE> {
@@ -59,6 +62,15 @@ where
             }
         }
 
+        let span = info_span!("process", index = u64::from(index));
+
+        #[cfg(feature = "otel")]
+        if let Some(metadata) = consumer.record_metadata() {
+            if let Some(receive) = metadata.downcast_ref::<tracing::Span>() {
+                let _ = span.set_parent(receive.context());
+            }
+        }
+
         async {
             let outputs = handler.handle(&record.data);
             for (seq, output) in outputs.into_iter().enumerate() {
@@ -69,7 +81,7 @@ where
             consumer.ack().await.map_err(RunError::Consumer)?;
             Ok::<_, RunError<C::Error, A::Error>>(())
         }
-        .instrument(info_span!("process", index = u64::from(index)))
+        .instrument(span)
         .await?;
     }
     Ok(())

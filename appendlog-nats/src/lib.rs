@@ -1,5 +1,7 @@
 mod consumer;
 mod log;
+#[cfg(feature = "otel")]
+mod otel;
 
 pub use consumer::{NatsConsumer, NatsConsumerError};
 pub use log::{NatsAppendError, NatsLog};

@@ -4,6 +4,9 @@ use std::sync::Arc;
 use appendlog_traits::{AsyncAppender, AsyncConsumer};
 use tracing::{debug, info_span, Instrument};
 
+#[cfg(feature = "otel")]
+use tracing_opentelemetry::OpenTelemetrySpanExt;
+
 pub enum BridgeError<CE, AE> {
     Consumer(CE),
     Appender(AE),
@@ -43,6 +46,15 @@ where
 {
     while let Some(record) = consumer.next().await.map_err(BridgeError::Consumer)? {
         let index = record.index;
+        let span = info_span!("bridge", index = u64::from(index));
+
+        #[cfg(feature = "otel")]
+        if let Some(metadata) = consumer.record_metadata() {
+            if let Some(receive) = metadata.downcast_ref::<tracing::Span>() {
+                let _ = span.set_parent(receive.context());
+            }
+        }
+
         async {
             let output_index = appender
                 .append(Arc::unwrap_or_clone(record.data))
@@ -52,7 +64,7 @@ where
             consumer.ack().await.map_err(BridgeError::Consumer)?;
             Ok::<_, BridgeError<C::Error, A::Error>>(())
         }
-        .instrument(info_span!("bridge", index = u64::from(index)))
+        .instrument(span)
         .await?;
     }
     Ok(())
@@ -71,6 +83,15 @@ where
 {
     while let Some(record) = consumer.next().await.map_err(BridgeError::Consumer)? {
         let index = record.index;
+        let span = info_span!("bridge_map", index = u64::from(index));
+
+        #[cfg(feature = "otel")]
+        if let Some(metadata) = consumer.record_metadata() {
+            if let Some(receive) = metadata.downcast_ref::<tracing::Span>() {
+                let _ = span.set_parent(receive.context());
+            }
+        }
+
         async {
             if let Some(out) = f(Arc::unwrap_or_clone(record.data)) {
                 let output_index = appender.append(out).await.map_err(BridgeError::Appender)?;
@@ -81,7 +102,7 @@ where
             consumer.ack().await.map_err(BridgeError::Consumer)?;
             Ok::<_, BridgeError<C::Error, A::Error>>(())
         }
-        .instrument(info_span!("bridge_map", index = u64::from(index)))
+        .instrument(span)
         .await?;
     }
     Ok(())

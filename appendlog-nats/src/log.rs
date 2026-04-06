@@ -3,6 +3,9 @@ use async_nats::jetstream::{self, stream::Stream};
 use serde::{de::DeserializeOwned, Serialize};
 use std::marker::PhantomData;
 
+#[cfg(feature = "otel")]
+use tracing_opentelemetry::OpenTelemetrySpanExt;
+
 use crate::NatsConsumer;
 
 pub struct NatsLog<T> {
@@ -63,11 +66,32 @@ impl<T: Serialize + Send + Sync> AsyncAppender for NatsLog<T> {
 
     async fn append(&self, item: Self::Item) -> Result<Index, Self::Error> {
         let payload = serde_json::to_vec(&item).map_err(NatsAppendError::Serialize)?;
+
+        #[cfg(feature = "otel")]
+        let ack = {
+            use tracing::{info_span, Instrument};
+            async {
+                let mut headers = async_nats::HeaderMap::new();
+                let cx = tracing::Span::current().context();
+                opentelemetry::global::get_text_map_propagator(|propagator| {
+                    propagator.inject_context(&cx, &mut crate::otel::HeaderInjector(&mut headers));
+                });
+                self.context
+                    .publish_with_headers(self.subject.clone(), headers, payload.into())
+                    .await
+                    .map_err(|e| NatsAppendError::Publish(Box::new(e)))
+            }
+            .instrument(info_span!("publish", subject = %self.subject))
+            .await?
+        };
+
+        #[cfg(not(feature = "otel"))]
         let ack = self
             .context
             .publish(self.subject.clone(), payload.into())
             .await
             .map_err(|e| NatsAppendError::Publish(Box::new(e)))?;
+
         let ack = ack
             .await
             .map_err(|e| NatsAppendError::Publish(Box::new(e)))?;

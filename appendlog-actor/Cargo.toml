@@ -3,16 +3,20 @@ name = "appendlog-actor"
 version = "0.0.0"
 edition = "2021"
 
+[features]
+otel = ["tracing-opentelemetry"]
+
 [dependencies]
 appendlog-traits = { path = "../appendlog-traits" }
 tracing = "0.1"
+tracing-opentelemetry = { version = "0.32", optional = true }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full"] }
 async-nats = "0.38"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-appendlog-nats = { path = "../appendlog-nats", features = ["actor"] }
+appendlog-nats = { path = "../appendlog-nats", features = ["actor", "otel"] }
 appendlog-traits = { path = "../appendlog-traits" }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["registry", "env-filter"] }
@@ -20,3 +24,6 @@ tracing-opentelemetry = "0.32"
 opentelemetry = "0.31"
 opentelemetry_sdk = "0.31"
 opentelemetry-otlp = { version = "0.31", default-features = false, features = ["grpc-tonic", "trace"] }
+
+[[example]]
+name = "pipeline"

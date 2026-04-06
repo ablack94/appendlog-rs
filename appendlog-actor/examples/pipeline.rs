@@ -4,7 +4,7 @@
 //!   - NATS server with JetStream: `nats-server -js`
 //!   - Jaeger: `docker run -p 16686:16686 -p 4317:4317 jaegertracing/all-in-one`
 //!
-//! Run: `cargo run --example pipeline -p appendlog-actor`
+//! Run: `cargo run --example pipeline -p appendlog-actor --features otel`
 //! Then open http://localhost:16686 to see traces.
 //!
 //! Flow:
@@ -13,6 +13,7 @@
 //! 3. A bridge picks out Analyzed events and forwards them as Summaries to an output log
 //! 4. A consumer reads summaries from the output log
 
+use opentelemetry::global;
 use opentelemetry::trace::TracerProvider as _;
 use serde::{Deserialize, Serialize};
 use tracing::info;
@@ -97,6 +98,11 @@ impl appendlog_actor::AsyncStateStore for NoopStateStore {
 }
 
 fn init_tracing() -> opentelemetry_sdk::trace::SdkTracerProvider {
+    // Enable W3C Trace Context propagation through NATS headers
+    global::set_text_map_propagator(
+        opentelemetry_sdk::propagation::TraceContextPropagator::new(),
+    );
+
     let exporter = opentelemetry_otlp::SpanExporter::builder()
         .with_tonic()
         .build()

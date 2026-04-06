@@ -5,6 +5,9 @@ use futures::StreamExt;
 use serde::de::DeserializeOwned;
 use std::marker::PhantomData;
 
+#[cfg(feature = "otel")]
+use tracing_opentelemetry::OpenTelemetrySpanExt;
+
 enum ConsumerState<T> {
     Empty,
     Fetched(async_nats::jetstream::Message),
@@ -14,6 +17,8 @@ enum ConsumerState<T> {
 pub struct NatsConsumer<T> {
     messages: pull::Stream,
     state: ConsumerState<T>,
+    #[cfg(feature = "otel")]
+    receive_span: Option<tracing::Span>,
     _marker: PhantomData<T>,
 }
 
@@ -32,16 +37,40 @@ impl<T> NatsConsumer<T> {
         NatsConsumer {
             messages,
             state: ConsumerState::Empty,
+            #[cfg(feature = "otel")]
+            receive_span: None,
             _marker: PhantomData,
         }
     }
 }
 
-fn try_parse<T: DeserializeOwned>(msg: &async_nats::jetstream::Message) -> Option<Record<T>> {
+struct ParsedMessage<T> {
+    record: Record<T>,
+    #[cfg(feature = "otel")]
+    parent_context: Option<opentelemetry::Context>,
+    #[cfg(feature = "otel")]
+    subject: String,
+}
+
+fn try_parse<T: DeserializeOwned>(msg: &async_nats::jetstream::Message) -> Option<ParsedMessage<T>> {
     let info = msg.info().ok()?;
     let index = Index::from(info.stream_sequence);
     let data: T = serde_json::from_slice(&msg.payload).ok()?;
-    Some(Record::new(index, data))
+
+    #[cfg(feature = "otel")]
+    let parent_context = msg.headers.as_ref().map(|headers| {
+        opentelemetry::global::get_text_map_propagator(|propagator| {
+            propagator.extract(&crate::otel::HeaderExtractor(headers))
+        })
+    });
+
+    Some(ParsedMessage {
+        record: Record::new(index, data),
+        #[cfg(feature = "otel")]
+        parent_context,
+        #[cfg(feature = "otel")]
+        subject: msg.subject.to_string(),
+    })
 }
 
 #[derive(Debug)]
@@ -80,9 +109,25 @@ impl<T: DeserializeOwned + Send + Sync> AsyncConsumer for NatsConsumer<T> {
             }
         };
 
-        if let Some(record) = try_parse(&msg) {
-            self.state = ConsumerState::Parsed(record.clone(), msg);
-            Ok(Some(record))
+        if let Some(parsed) = try_parse(&msg) {
+            #[cfg(feature = "otel")]
+            {
+                let index = parsed.record.index;
+                let span = tracing::info_span!(
+                    "receive",
+                    subject = %parsed.subject,
+                    index = u64::from(index),
+                );
+                if let Some(cx) = parsed.parent_context {
+                    let _ = span.set_parent(cx);
+                }
+                // Enter briefly so the OTel layer registers the span
+                span.in_scope(|| {});
+                self.receive_span = Some(span);
+            }
+
+            self.state = ConsumerState::Parsed(parsed.record.clone(), msg);
+            Ok(Some(parsed.record))
         } else {
             self.state = ConsumerState::Fetched(msg);
             Ok(None)
@@ -94,6 +139,25 @@ impl<T: DeserializeOwned + Send + Sync> AsyncConsumer for NatsConsumer<T> {
         if let ConsumerState::Parsed(_, msg) | ConsumerState::Fetched(msg) = prev {
             msg.ack().await.map_err(NatsConsumerError::Ack)?;
         }
+        // Drop the receive span on ack, ending it
+        #[cfg(feature = "otel")]
+        {
+            self.receive_span.take();
+        }
         Ok(())
+    }
+
+    fn record_metadata(&self) -> Option<&(dyn std::any::Any + Send + Sync)> {
+        #[cfg(feature = "otel")]
+        {
+            self.receive_span.as_ref().map(|span| {
+                // Return the span itself — the run loop extracts its OTel context
+                span as &(dyn std::any::Any + Send + Sync)
+            })
+        }
+        #[cfg(not(feature = "otel"))]
+        {
+            None
+        }
     }
 }
