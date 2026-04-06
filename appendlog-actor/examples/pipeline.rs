@@ -101,8 +101,13 @@ fn init_tracing() -> opentelemetry_sdk::trace::SdkTracerProvider {
         .build()
         .expect("failed to create OTLP exporter");
 
+    let resource = opentelemetry_sdk::Resource::builder()
+        .with_service_name("pipeline-example")
+        .build();
+
     let provider = opentelemetry_sdk::trace::SdkTracerProvider::builder()
         .with_batch_exporter(exporter)
+        .with_resource(resource)
         .build();
 
     let tracer = provider.tracer("appendlog-pipeline");
