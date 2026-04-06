@@ -1,14 +1,23 @@
-//! Pipeline example: actor + bridge working together.
+//! Pipeline example with OpenTelemetry tracing.
 //!
+//! Requires:
+//!   - NATS server with JetStream: `nats-server -js`
+//!   - Jaeger: `docker run -p 16686:16686 -p 4317:4317 jaegertracing/all-in-one`
+//!
+//! Run: `cargo run --example pipeline -p appendlog-actor`
+//! Then open http://localhost:16686 to see traces.
+//!
+//! Flow:
 //! 1. Raw text messages are appended to an event log
-//! 2. An actor on the event log analyzes each message, emitting Analyzed events
-//!    back to the same log
-//! 3. A bridge consumes from the event log, picks out Analyzed events, and
-//!    forwards them as Summary records to a separate output log
+//! 2. An actor analyzes each message, emitting Analyzed events back to the same log
+//! 3. A bridge picks out Analyzed events and forwards them as Summaries to an output log
 //! 4. A consumer reads summaries from the output log
 
+use opentelemetry::trace::TracerProvider as _;
 use serde::{Deserialize, Serialize};
 use tracing::info;
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
 
 use appendlog_actor::{Actor, ActorHandler};
 use appendlog_traits::{AsyncAppender, AsyncConsumer};
@@ -44,9 +53,14 @@ impl Actor for AnalyzerActor {
                 let word_count = text.split_whitespace().count();
                 let char_count = text.chars().count();
                 info!(word_count, char_count, "analyzed message");
-                (Some(Event::Analyzed { word_count, char_count }), state)
+                (
+                    Some(Event::Analyzed {
+                        word_count,
+                        char_count,
+                    }),
+                    state,
+                )
             }
-            // Ignore our own output
             Event::Analyzed { .. } => (None, state),
         }
     }
@@ -60,7 +74,7 @@ impl<'a> TryFrom<&'a Event> for Event {
     }
 }
 
-// -- State store that stores nothing (stateless actor) --
+// -- Stateless actor needs no persistence --
 
 struct NoopStateStore;
 
@@ -72,14 +86,38 @@ impl appendlog_actor::AsyncStateStore for NoopStateStore {
         Ok(None)
     }
 
-    async fn save(&self, _state: &(), _index: appendlog_traits::Index) -> Result<(), Self::Error> {
+    async fn save(
+        &self,
+        _state: &(),
+        _index: appendlog_traits::Index,
+    ) -> Result<(), Self::Error> {
         Ok(())
     }
 }
 
+fn init_tracing() -> opentelemetry_sdk::trace::SdkTracerProvider {
+    let exporter = opentelemetry_otlp::SpanExporter::builder()
+        .with_tonic()
+        .build()
+        .expect("failed to create OTLP exporter");
+
+    let provider = opentelemetry_sdk::trace::SdkTracerProvider::builder()
+        .with_batch_exporter(exporter)
+        .build();
+
+    let tracer = provider.tracer("appendlog-pipeline");
+
+    tracing_subscriber::registry()
+        .with(tracing_subscriber::fmt::layer())
+        .with(tracing_opentelemetry::layer().with_tracer(tracer))
+        .init();
+
+    provider
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    tracing_subscriber::fmt::init();
+    let provider = init_tracing();
 
     let client = async_nats::connect("localhost:4222").await?;
     let jetstream = async_nats::jetstream::new(client.clone());
@@ -136,7 +174,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await
     });
 
-    // Spawn the publisher
+    // Publish some messages
     let messages = vec![
         "hello world",
         "the quick brown fox jumps over the lazy dog",
@@ -156,7 +194,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         info!("all messages published");
     });
 
-    // Spawn the summary reader
+    // Read summaries from the output log
     let reader_handle = tokio::spawn(async move {
         let mut consumer = summary_consumer;
         for i in 0..expected {
@@ -185,6 +223,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     actor_handle.abort();
     bridge_handle.abort();
+
+    // Flush traces before exit
+    provider.shutdown()?;
     info!("done");
 
     Ok(())
