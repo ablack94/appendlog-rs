@@ -18,6 +18,7 @@ use serde::{Deserialize, Serialize};
 use tracing::info;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
+use tracing_subscriber::Layer;
 
 use appendlog_actor::{Actor, ActorHandler};
 use appendlog_traits::{AsyncAppender, AsyncConsumer};
@@ -112,8 +113,11 @@ fn init_tracing() -> opentelemetry_sdk::trace::SdkTracerProvider {
 
     let tracer = provider.tracer("appendlog-pipeline");
 
+    let stdout_filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
+
     tracing_subscriber::registry()
-        .with(tracing_subscriber::fmt::layer())
+        .with(tracing_subscriber::fmt::layer().with_filter(stdout_filter))
         .with(tracing_opentelemetry::layer().with_tracer(tracer))
         .init();
 
