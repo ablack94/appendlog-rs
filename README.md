@@ -11,7 +11,7 @@ Provides a simple trait-based interface for append-only logs where each entry ge
 | `appendlog-traits` | Core `Appender`/`Lookup` traits (sync) and `AsyncAppender`/`AsyncLookup`/`AsyncConsumer` (async) |
 | `appendlog-mem` | In-memory backend using `parking_lot` — good for testing and prototyping |
 | `appendlog-nats` | [NATS JetStream](https://docs.nats.io/nats-concepts/jetstream) backend — persistent, distributed |
-| `appendlog-actor` | Actor framework: lockstep multi-actor dispatch on a single log, plus bridges between logs |
+| `appendlog-actor` | Actor framework: stateful actors that read and write a single log, plus stateless bridges between logs |
 
 ## Quick start
 
@@ -43,13 +43,13 @@ Requires a NATS server with JetStream enabled (`nats-server -js`).
 
 The `appendlog-actor` crate provides two primitives:
 
-- **Actor** — reads from and writes back to the **same** log. Pure state machine.
-- **Bridge** — consumes from one log, appends to another. Stateless plumbing.
+- **Actor** — a pure state machine that reads from and writes back to the **same** log. `(event, state) -> (outputs, state)`.
+- **Bridge** — consumes from one log, appends to another. Stateless. The only cross-log primitive.
 
-Multiple actors can be composed into a single lockstep dispatcher via tuple handlers:
+Each actor runs in its own task (or process / pod) against its own consumer — there is no shared-consumer multi-actor dispatcher. Cross-actor causality flows through the log itself.
 
 ```rust
-use appendlog_actor::{Actor, ActorHandler};
+use appendlog_actor::Actor;
 
 struct MyActor;
 
@@ -66,14 +66,16 @@ impl Actor for MyActor {
 }
 ```
 
-Wire it up with `ActorHandler` and the lockstep `run` loop:
+Run it with the actor, a consumer, an appender, and a state store. `run` returns a future, so pass it directly to `tokio::spawn`:
 
 ```rust
-let handler = (ActorHandler::new(MyActor, state_store),);
-appendlog_actor::run(consumer, appender, handler).await?;
+let consumer = log.consumer("my-actor").await;
+tokio::spawn(appendlog_actor::run(MyActor, consumer, log.clone(), state_store));
 ```
 
-The run loop consumes from the log, dispatches to all handlers, appends outputs back to the same log, saves state, then acks. State is saved before each ack for at-least-once delivery.
+The loop consumes from the log, calls `actor.handle`, appends outputs back to the same log, saves state, then acks. State is saved before each ack for at-least-once delivery.
+
+For stateless actors (`State = ()`), pass `()` as the state store — `AsyncStateStore` is implemented for `()`.
 
 For connecting separate logs, use `bridge` or `bridge_map`:
 
@@ -110,14 +112,9 @@ trait AsyncConsumer {
 trait Actor {
     fn handle(&self, event: Self::Event, state: Self::State) -> (Self::Outputs, Self::State);
 }
-trait Handler<E> {
-    async fn init(&mut self) -> Result<(), Box<dyn Error + Send + Sync>>;
-    async fn handle(&mut self, event: &E) -> Vec<E>;
-    async fn save_state(&mut self) -> Result<(), Box<dyn Error + Send + Sync>>;
-}
 trait AsyncStateStore {
-    async fn load(&self) -> Result<Option<Self::State>, Self::Error>;
-    async fn save(&self, state: &Self::State) -> Result<(), Self::Error>;
+    async fn load(&self) -> Result<Option<(Self::State, Index)>, Self::Error>;
+    async fn save(&self, state: &Self::State, index: Index) -> Result<(), Self::Error>;
 }
 ```
 

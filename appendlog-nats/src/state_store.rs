@@ -3,6 +3,7 @@ use async_nats::jetstream::{self, kv};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::marker::PhantomData;
 
+#[derive(Clone)]
 pub struct NatsStateStore<S> {
     store: kv::Store,
     key: String,

@@ -1,5 +1,18 @@
 use appendlog_traits::Index;
 
+impl AsyncStateStore for () {
+    type State = ();
+    type Error = std::convert::Infallible;
+
+    async fn load(&self) -> Result<Option<((), Index)>, Self::Error> {
+        Ok(None)
+    }
+
+    async fn save(&self, _: &(), _: Index) -> Result<(), Self::Error> {
+        Ok(())
+    }
+}
+
 pub trait AsyncStateStore {
     type State;
     type Error;

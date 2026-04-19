@@ -8,6 +8,7 @@ use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 use crate::NatsConsumer;
 
+#[derive(Clone)]
 pub struct NatsLog<T> {
     context: jetstream::Context,
     stream: Stream,

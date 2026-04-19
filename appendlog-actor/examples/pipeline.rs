@@ -21,15 +21,20 @@ use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 use tracing_subscriber::Layer;
 
-use appendlog_actor::{Actor, ActorHandler};
+use appendlog_actor::Actor;
 use appendlog_traits::{AsyncAppender, AsyncConsumer};
 
 // -- Event log types (single log, shared by actor + bridge) --
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 enum Event {
-    Raw { text: String },
-    Analyzed { word_count: usize, char_count: usize },
+    Raw {
+        text: String,
+    },
+    Analyzed {
+        word_count: usize,
+        char_count: usize,
+    },
 }
 
 // -- Output log type (bridge destination) --
@@ -68,40 +73,10 @@ impl Actor for AnalyzerActor {
     }
 }
 
-impl<'a> TryFrom<&'a Event> for Event {
-    type Error = std::convert::Infallible;
-
-    fn try_from(event: &'a Event) -> Result<Self, Self::Error> {
-        Ok(event.clone())
-    }
-}
-
-// -- Stateless actor needs no persistence --
-
-struct NoopStateStore;
-
-impl appendlog_actor::AsyncStateStore for NoopStateStore {
-    type State = ();
-    type Error = std::convert::Infallible;
-
-    async fn load(&self) -> Result<Option<((), appendlog_traits::Index)>, Self::Error> {
-        Ok(None)
-    }
-
-    async fn save(
-        &self,
-        _state: &(),
-        _index: appendlog_traits::Index,
-    ) -> Result<(), Self::Error> {
-        Ok(())
-    }
-}
 
 fn init_tracing() -> opentelemetry_sdk::trace::SdkTracerProvider {
     // Enable W3C Trace Context propagation through NATS headers
-    global::set_text_map_propagator(
-        opentelemetry_sdk::propagation::TraceContextPropagator::new(),
-    );
+    global::set_text_map_propagator(opentelemetry_sdk::propagation::TraceContextPropagator::new());
 
     let exporter = opentelemetry_otlp::SpanExporter::builder()
         .with_tonic()
@@ -170,8 +145,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Spawn the actor
     let actor_handle = tokio::spawn(async move {
-        let handler = (ActorHandler::new(AnalyzerActor, NoopStateStore),);
-        appendlog_actor::run(actor_consumer, event_log, handler).await
+        appendlog_actor::run(AnalyzerActor, actor_consumer, event_log, ()).await
     });
 
     // Spawn the bridge: Event log -> Summary log (only forwards Analyzed events)

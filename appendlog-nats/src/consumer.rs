@@ -52,7 +52,9 @@ struct ParsedMessage<T> {
     subject: String,
 }
 
-fn try_parse<T: DeserializeOwned>(msg: &async_nats::jetstream::Message) -> Option<ParsedMessage<T>> {
+fn try_parse<T: DeserializeOwned>(
+    msg: &async_nats::jetstream::Message,
+) -> Option<ParsedMessage<T>> {
     let info = msg.info().ok()?;
     let index = Index::from(info.stream_sequence);
     let data: T = serde_json::from_slice(&msg.payload).ok()?;
